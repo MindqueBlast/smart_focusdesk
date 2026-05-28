@@ -1,0 +1,11 @@
+opencv-python
+mediapipe
+numpy
+blinkstick
+dlib
+blink1
+pyserial
+firebase-admin
+fastapi
+uvicorn
+python-dotenv

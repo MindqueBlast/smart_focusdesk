@@ -1,0 +1,25 @@
+# --- Sensitive Credentials & Keys (CRITICAL) ---
+firebase-key.json
+firebase_config.json
+.env
+
+# --- Python Virtual Environments ---
+.venv/
+venv/
+ENV/
+env/
+
+# --- Local Databases & Session Data Logs ---
+data/
+out/
+
+# --- Python System & Cache files ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# --- IDE Settings ---
+.vscode/
+.idea/
+.DS_Store
