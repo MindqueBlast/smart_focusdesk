@@ -19,10 +19,31 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { formatDuration } from "@/lib/utils";
 import type { FocusState } from "@/types";
 
+function cameraPanelStatus(
+  cameraState: string,
+  isPlaying: boolean,
+): "idle" | "requesting" | "active" | "playing" | "error" {
+  if (cameraState === "denied" || cameraState === "unavailable" || cameraState === "disconnected") {
+    return "error";
+  }
+  if (cameraState === "requesting") return "requesting";
+  if (isPlaying) return "playing";
+  if (cameraState === "active") return "active";
+  return "idle";
+}
+
 export default function SessionView() {
   const router = useRouter();
   const { user } = useAuth();
-  const { videoRef, state: cameraState, error: cameraError, start, stop } = useCamera();
+  const {
+    videoRef,
+    setVideoRef,
+    state: cameraState,
+    error: cameraError,
+    isPlaying,
+    start,
+    stop,
+  } = useCamera();
   const {
     metrics,
     settings,
@@ -136,6 +157,7 @@ export default function SessionView() {
   const focusState: FocusState = metrics?.focusState ?? "Focused";
   const currentScore = metrics?.current_focus_score ?? 0;
   const sessionScore = sessionEngine.sessionFocusScore;
+  const panelStatus = cameraPanelStatus(cameraState, isPlaying);
 
   if (cameraState === "denied" || cameraState === "unavailable") {
     return (
@@ -152,46 +174,40 @@ export default function SessionView() {
     );
   }
 
-  if (cv.state === "loading") {
-    return (
-      <>
-        <Nav />
-        <main className="flex min-h-[70vh] flex-col items-center justify-center gap-4">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald border-t-transparent" />
-          <p className="text-muted">{cv.loadMessage || "Loading vision models..."}</p>
-        </main>
-      </>
-    );
-  }
-
-  if (cv.state === "error") {
-    return (
-      <>
-        <Nav />
-        <main className="mx-auto flex min-h-[70vh] max-w-lg flex-col items-center justify-center px-6 text-center">
-          <h1 className="font-display text-2xl font-semibold">Model failed to load</h1>
-          <p className="mt-4 text-muted">{cv.error}</p>
-          <Button className="mt-8" onClick={() => cv.init()}>
-            Retry
-          </Button>
-        </main>
-      </>
-    );
-  }
-
   return (
     <>
       <AmbientBackground focusState={focusState} reducedMotion={settings.reduced_motion} />
       <Nav />
       <main className="mx-auto max-w-6xl px-6 py-8">
+        {cv.state === "loading" && (
+          <div className="mb-4 flex items-center gap-3 rounded-xl border border-line/60 bg-panel/50 px-4 py-3 text-sm text-muted">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald border-t-transparent" />
+            {cv.loadMessage || "Loading vision models..."}
+          </div>
+        )}
+
+        {cv.state === "error" && (
+          <div className="mb-4 flex items-center justify-between gap-4 rounded-xl border border-crimson/30 bg-crimson/10 px-4 py-3 text-sm text-crimson">
+            <span>Model failed to load: {cv.error}</span>
+            <Button variant="secondary" size="sm" onClick={() => cv.init()}>
+              Retry
+            </Button>
+          </div>
+        )}
+
         <div className="grid gap-8 lg:grid-cols-[1.2fr_1fr]">
           <div className="space-y-4">
             <CameraPanel
-              ref={videoRef}
+              videoRef={setVideoRef}
               className="aspect-video w-full"
               dimmed={isPaused}
+              status={panelStatus}
               overlay={
-                !metrics?.face_detected ? (
+                cv.state !== "ready" ? (
+                  <div className="rounded-xl bg-page/70 px-4 py-2 text-sm text-muted">
+                    Initializing vision engine...
+                  </div>
+                ) : !metrics?.face_detected ? (
                   <div className="rounded-xl bg-page/70 px-4 py-2 text-sm text-amber">
                     Step into frame
                   </div>
@@ -247,7 +263,7 @@ export default function SessionView() {
 
             <div className="mt-auto flex flex-wrap gap-3">
               {!isSessionActive ? (
-                <Button size="lg" onClick={handleStart}>
+                <Button size="lg" onClick={handleStart} disabled={cv.state !== "ready"}>
                   Start Focus Session
                 </Button>
               ) : (

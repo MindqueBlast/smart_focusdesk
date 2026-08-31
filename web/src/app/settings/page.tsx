@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { Nav } from "@/components/layout/Nav";
 import { Button } from "@/components/ui/Button";
@@ -39,6 +39,14 @@ export default function SettingsPage() {
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  const currentHost = useMemo(
+    () => (typeof window !== "undefined" ? window.location.hostname : ""),
+    [],
+  );
+  const isUnauthorizedDomainError =
+    authError?.toLowerCase().includes("unauthorized-domain") ||
+    authError?.toLowerCase().includes("not authorized");
 
   if (!settings) {
     return (
@@ -121,6 +129,22 @@ export default function SettingsPage() {
                 <p className="text-sm text-muted">
                   Sign in with Google to sync session summaries to your account.
                 </p>
+                {configured && currentHost && !currentHost.includes("localhost") && (
+                  <div className="rounded-xl border border-amber/30 bg-amber/10 p-4 text-sm text-muted">
+                    <p className="font-medium text-text">Firebase authorized domain required</p>
+                    <p className="mt-2">
+                      Google sign-in only works on domains listed in Firebase Console. Add this
+                      deployment hostname:
+                    </p>
+                    <code className="mt-2 block rounded-lg bg-page/80 px-3 py-2 text-amber">
+                      {currentHost}
+                    </code>
+                    <p className="mt-2">
+                      Firebase Console → Authentication → Settings → Authorized domains → Add
+                      domain.
+                    </p>
+                  </div>
+                )}
                 <Button
                   variant="secondary"
                   onClick={async () => {
@@ -128,13 +152,25 @@ export default function SettingsPage() {
                       setAuthError(null);
                       await signIn();
                     } catch (err) {
-                      setAuthError(err instanceof Error ? err.message : "Sign-in failed");
+                      const message =
+                        err instanceof Error ? err.message : "Sign-in failed";
+                      setAuthError(message);
                     }
                   }}
                 >
                   Sign in with Google
                 </Button>
-                {authError && <p className="text-sm text-crimson">{authError}</p>}
+                {authError && (
+                  <div className="space-y-2">
+                    <p className="text-sm text-crimson">{authError}</p>
+                    {isUnauthorizedDomainError && currentHost && (
+                      <p className="text-sm text-muted">
+                        Add <code className="text-amber">{currentHost}</code> to Firebase
+                        Authentication → Settings → Authorized domains, then retry sign-in.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </section>

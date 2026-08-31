@@ -17,6 +17,17 @@ NEXT_PUBLIC_FIREBASE_APP_ID=
 
 Get values from Firebase Console → Project settings → Your apps → Web app config.
 
+### Authorized domains (required for Google sign-in)
+
+Each deployed hostname must be allowlisted in Firebase before OAuth works.
+
+1. Open [Firebase Console](https://console.firebase.google.com/) → your project
+2. Go to **Authentication** → **Settings** → **Authorized domains**
+3. Click **Add domain** and enter your Vercel hostname (e.g. `web-beta-six-93.vercel.app`)
+4. Save, then retry Google sign-in in **Settings**
+
+`localhost` is included by default for local development.
+
 Deploy Firestore rules from `firestore.rules`:
 
 ```bash

@@ -41,17 +41,30 @@ const STEPS = [
   },
 ];
 
+function cameraPanelStatus(
+  cameraState: string,
+  isPlaying: boolean,
+): "idle" | "requesting" | "active" | "playing" | "error" {
+  if (cameraState === "denied" || cameraState === "unavailable") return "error";
+  if (cameraState === "requesting") return "requesting";
+  if (isPlaying) return "playing";
+  if (cameraState === "active") return "active";
+  return "idle";
+}
+
 export default function OnboardingPage() {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const { videoRef, state, error, start } = useCamera();
+  const { setVideoRef, state, error, isPlaying, start } = useCamera();
 
   useEffect(() => {
     loadSettings().then(setSettings);
   }, []);
 
   const current = STEPS[step];
+  const showCamera = step >= 2;
+  const panelStatus = cameraPanelStatus(state, isPlaying);
 
   const handleNext = async () => {
     if (step === 2 && state !== "active") {
@@ -96,14 +109,17 @@ export default function OnboardingPage() {
             <h1 className="font-display text-3xl font-semibold md:text-4xl">{current.title}</h1>
             <p className="text-lg leading-relaxed text-muted">{current.body}</p>
 
-            {step === 3 && (
+            {showCamera && (
               <CameraPanel
-                ref={videoRef}
+                videoRef={setVideoRef}
                 className="aspect-video w-full"
+                status={panelStatus}
                 overlay={
-                  <div className="rounded-xl border-2 border-dashed border-emerald/50 px-6 py-3 text-sm text-emerald">
-                    Center your face here
-                  </div>
+                  step === 3 ? (
+                    <div className="rounded-xl border-2 border-dashed border-emerald/50 px-6 py-3 text-sm text-emerald">
+                      Center your face here
+                    </div>
+                  ) : undefined
                 }
               />
             )}
@@ -112,10 +128,6 @@ export default function OnboardingPage() {
               <div className="rounded-xl border border-crimson/30 bg-crimson/10 p-4 text-sm text-crimson">
                 {error}
               </div>
-            )}
-
-            {step === 2 && state === "active" && (
-              <CameraPanel ref={videoRef} className="aspect-video w-full" />
             )}
           </motion.div>
         </AnimatePresence>
