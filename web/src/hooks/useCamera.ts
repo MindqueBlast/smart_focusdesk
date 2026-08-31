@@ -25,12 +25,25 @@ export function useCamera() {
       video.srcObject = stream;
     }
 
+    const markPlaying = () => {
+      if (!video.paused && video.readyState >= 2) {
+        setIsPlaying(true);
+      }
+    };
+
+    video.onloadedmetadata = markPlaying;
+    video.oncanplay = markPlaying;
+    video.onplaying = () => setIsPlaying(true);
+
     try {
       await video.play();
-      setIsPlaying(true);
+      markPlaying();
       return true;
     } catch {
-      setIsPlaying(false);
+      // Autoplay can fail until metadata loads; loadedmetadata/onplaying will retry.
+      if (video.readyState >= 2) {
+        setIsPlaying(!video.paused);
+      }
       return false;
     }
   }, []);

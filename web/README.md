@@ -2,15 +2,21 @@
 
 Browser-native focus tracking. All CV runs locally via MediaPipe.
 
+## Production URL
+
+**https://smartfocus-app.vercel.app**
+
+(Vercel project: `smartfocus` in team `aaditya-sahus-projects`)
+
 ## Environment (Firebase cloud sync)
 
 Set these in Vercel → Project → Settings → Environment Variables:
 
 ```env
 NEXT_PUBLIC_FIREBASE_API_KEY=
-NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=smart-focusdesk-cloud.firebaseapp.com
-NEXT_PUBLIC_FIREBASE_PROJECT_ID=smart-focusdesk-cloud
-NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=smart-focusdesk-cloud.appspot.com
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=smartfocus-27404.firebaseapp.com
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=smartfocus-27404
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=smartfocus-27404.firebasestorage.app
 NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
 NEXT_PUBLIC_FIREBASE_APP_ID=
 ```
@@ -23,7 +29,7 @@ Each deployed hostname must be allowlisted in Firebase before OAuth works.
 
 1. Open [Firebase Console](https://console.firebase.google.com/) → your project
 2. Go to **Authentication** → **Settings** → **Authorized domains**
-3. Click **Add domain** and enter your Vercel hostname (e.g. `web-beta-six-93.vercel.app`)
+3. Click **Add domain** and enter your Vercel hostname: `smartfocus-app.vercel.app`
 4. Save, then retry Google sign-in in **Settings**
 
 `localhost` is included by default for local development.

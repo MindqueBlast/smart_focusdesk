@@ -17,8 +17,9 @@ export function CameraPanel({
   videoRef,
   status = "idle",
 }: CameraPanelProps) {
-  const showLoading = status === "requesting" || status === "active";
+  const showLoading = status === "requesting";
   const showLive = status === "playing";
+  const showStarting = status === "active" && !showLive;
 
   return (
     <div
@@ -36,12 +37,16 @@ export function CameraPanel({
         autoPlay
       />
 
-      {showLoading && !showLive && (
+      {showLoading && (
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 bg-panel/80">
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald border-t-transparent" />
-          <span className="text-sm text-muted">
-            {status === "requesting" ? "Requesting camera access..." : "Starting camera..."}
-          </span>
+          <span className="text-sm text-muted">Requesting camera access...</span>
+        </div>
+      )}
+
+      {showStarting && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-page/30">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald border-t-transparent" />
         </div>
       )}
 
