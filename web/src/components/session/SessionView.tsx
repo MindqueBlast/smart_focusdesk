@@ -38,6 +38,7 @@ export default function SessionView() {
   const {
     videoRef,
     setVideoRef,
+    isVideoMounted,
     state: cameraState,
     error: cameraError,
     isPlaying,
@@ -81,15 +82,25 @@ export default function SessionView() {
   }, []);
 
   useEffect(() => {
+    if (!isVideoMounted) return;
+
+    let cancelled = false;
+
     async function boot() {
       await start();
+      if (cancelled) return;
       await cv.init();
+      if (cancelled) return;
       setInitialized(true);
     }
-    boot();
-    return () => stop();
+
+    void boot();
+    return () => {
+      cancelled = true;
+      stop();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isVideoMounted]);
 
   useFrameLoop(videoRef, initialized && cv.state === "ready" && !isPaused, cv.sendFrame);
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export type CameraState =
   | "idle"
@@ -10,47 +10,75 @@ export type CameraState =
   | "unavailable"
   | "disconnected";
 
+function hasVideoFrames(video: HTMLVideoElement) {
+  return video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
+}
+
 export function useCamera() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const attachTokenRef = useRef(0);
   const [state, setState] = useState<CameraState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isVideoMounted, setIsVideoMounted] = useState(false);
 
   const attachStream = useCallback(async (video: HTMLVideoElement) => {
     const stream = streamRef.current;
     if (!stream) return false;
+
+    const token = ++attachTokenRef.current;
 
     if (video.srcObject !== stream) {
       video.srcObject = stream;
     }
 
     const markPlaying = () => {
-      if (!video.paused && video.readyState >= 2) {
+      if (token !== attachTokenRef.current) return;
+      if (hasVideoFrames(video) && !video.paused) {
         setIsPlaying(true);
       }
     };
 
     video.onloadedmetadata = markPlaying;
+    video.onloadeddata = markPlaying;
     video.oncanplay = markPlaying;
-    video.onplaying = () => setIsPlaying(true);
+    video.onplaying = () => {
+      if (token === attachTokenRef.current) setIsPlaying(true);
+    };
 
     try {
       await video.play();
-      markPlaying();
-      return true;
     } catch {
-      // Autoplay can fail until metadata loads; loadedmetadata/onplaying will retry.
-      if (video.readyState >= 2) {
-        setIsPlaying(!video.paused);
-      }
-      return false;
+      // Autoplay may fail until metadata arrives; events below will retry play().
     }
+
+    markPlaying();
+
+    // Poll briefly — some browsers attach the stream without firing loadedmetadata promptly.
+    for (let i = 0; i < 30; i += 1) {
+      if (token !== attachTokenRef.current) return false;
+      if (hasVideoFrames(video)) {
+        if (video.paused) {
+          try {
+            await video.play();
+          } catch {
+            // ignore
+          }
+        }
+        markPlaying();
+        if (!video.paused) return true;
+      }
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+
+    return hasVideoFrames(video) && !video.paused;
   }, []);
 
   const setVideoRef = useCallback(
     (node: HTMLVideoElement | null) => {
       videoRef.current = node;
+      setIsVideoMounted(Boolean(node));
       if (node && streamRef.current) {
         void attachStream(node);
       }
@@ -58,12 +86,11 @@ export function useCamera() {
     [attachStream],
   );
 
-  // Re-attach when stream becomes available after the video element mounts.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (state === "active" && videoRef.current && streamRef.current) {
       void attachStream(videoRef.current);
     }
-  }, [state, attachStream]);
+  }, [state, isVideoMounted, attachStream]);
 
   const start = useCallback(async () => {
     if (streamRef.current) {
@@ -126,6 +153,7 @@ export function useCamera() {
   }, [attachStream]);
 
   const stop = useCallback(() => {
+    attachTokenRef.current += 1;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
@@ -138,6 +166,7 @@ export function useCamera() {
   return {
     videoRef,
     setVideoRef,
+    isVideoMounted,
     state,
     error,
     isPlaying,

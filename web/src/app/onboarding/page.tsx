@@ -56,7 +56,7 @@ export default function OnboardingPage() {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const { setVideoRef, state, error, isPlaying, start } = useCamera();
+  const { setVideoRef, isVideoMounted, state, error, isPlaying, start } = useCamera();
 
   useEffect(() => {
     loadSettings().then(setSettings);
@@ -68,6 +68,7 @@ export default function OnboardingPage() {
 
   const handleNext = async () => {
     if (step === 2 && state !== "active") {
+      if (!isVideoMounted) return;
       await start();
       return;
     }
@@ -138,7 +139,7 @@ export default function OnboardingPage() {
               Back
             </Button>
           )}
-          <Button onClick={handleNext}>
+          <Button onClick={handleNext} disabled={step === 2 && state !== "active" && !isVideoMounted}>
             {step === 2 && state !== "active"
               ? "Allow Camera"
               : step === STEPS.length - 1

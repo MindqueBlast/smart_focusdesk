@@ -24,14 +24,14 @@ export function CameraPanel({
   return (
     <div
       className={cn(
-        "relative min-h-[200px] overflow-hidden rounded-2xl border border-line/80 bg-panel shadow-[0_24px_80px_rgba(0,0,0,0.45)]",
+        "relative min-h-[200px] overflow-hidden rounded-2xl border border-line/80 bg-black shadow-[0_24px_80px_rgba(0,0,0,0.45)]",
         dimmed && "opacity-80",
         className,
       )}
     >
       <video
         ref={videoRef}
-        className="h-full min-h-[200px] w-full scale-x-[-1] object-cover"
+        className="absolute inset-0 h-full w-full scale-x-[-1] object-cover"
         playsInline
         muted
         autoPlay
