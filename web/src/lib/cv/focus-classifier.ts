@@ -4,11 +4,14 @@ import {
   CALIBRATION_SAMPLES,
   EDGE_NEAR_THRESH,
   HARD_SAFETY_YAW_LIMIT,
+  PITCH_DOWN_THRESHOLD,
+  SOFT_YAW_THRESHOLD,
+  STATUS_DEBOUNCE_FRAMES,
   VECTOR_EMA_ALPHA,
   VELOCITY_IGNORE_SECONDS,
   VELOCITY_THRESHOLD,
 } from "./constants";
-import { computeEyeOffset, isGazeExtreme } from "./gaze-estimator";
+import { computeEyeOffset, getInterPupillaryDistance, isGazeExtreme } from "./gaze-estimator";
 import { applyCalibration, extractFaceMetrics } from "./head-pose";
 import { isPoorPosture } from "./posture";
 import { applyLandmarkSmoothing } from "./smoothing";
@@ -47,6 +50,7 @@ export class FocusClassifier {
     dynamic_corners: [],
   };
 
+  private calibrated = false;
   private previousLandmarks: Landmark[] | null = null;
   private calibrationState = "idle";
   private calibrationStartedAt = 0;
@@ -57,6 +61,23 @@ export class FocusClassifier {
   private lastCombinedTs = 0;
   private ignoreUntil = 0;
   private blinkFrames = 0;
+  private pendingStatus: InternalStatus | null = null;
+  private pendingStatusFrames = 0;
+  private currentStatus: InternalStatus = "FOCUSED";
+  private smoothedYaw = 0;
+  private smoothedPitch = 0;
+  private positionOkFrames = 0;
+
+  setOffsets(offsets: CalibrationOffsets, mode: TrackingMode): void {
+    this.offsets = { ...offsets, dynamic_corners: [...offsets.dynamic_corners] };
+    this.trackingMode = mode;
+    this.calibrated = true;
+    this.calibrationState = "idle";
+  }
+
+  isCalibrated(): boolean {
+    return this.calibrated;
+  }
 
   startCalibration(): void {
     if (this.trackingMode === "DYNAMIC_MAPPING") {
@@ -68,23 +89,51 @@ export class FocusClassifier {
       this.calibrationState = "countdown";
       this.calibrationSamples = [];
     }
+    this.calibrated = false;
     this.calibrationStartedAt = performance.now() / 1000;
   }
 
-  getCalibrationState(): CalibrationState {
+  getCalibrationState(now = performance.now() / 1000): CalibrationState {
+    const inGrace =
+      this.calibrationState === "idle" &&
+      now < this.calibrationDoneUntil + 0.01;
+
+    let stage = "idle";
+    if (this.calibrationState === "countdown" || this.calibrationState === "corner_countdown") {
+      stage = "countdown";
+    } else if (this.calibrationState === "sampling" || this.calibrationState === "corner_sampling") {
+      stage = "sampling";
+    } else if (this.calibrated && !inGrace) {
+      stage = "complete";
+    } else if (this.calibrationState === "idle" && !this.calibrated) {
+      stage = "intro";
+    }
+
+    const totalSteps =
+      this.trackingMode === "DYNAMIC_MAPPING" ? DYNAMIC_CALIB_CORNERS + 1 : 1;
+    const currentStep =
+      this.trackingMode === "DYNAMIC_MAPPING"
+        ? this.dynamicCornerIdx + (this.calibrationState.includes("sampling") ? 1 : 0)
+        : this.calibrationState === "sampling" || this.calibrated
+          ? 1
+          : 0;
+
+    const countdownRemaining =
+      this.calibrationState === "countdown" || this.calibrationState === "corner_countdown"
+        ? Math.max(0, CALIBRATION_COUNTDOWN_SECONDS - (now - this.calibrationStartedAt))
+        : undefined;
+
     return {
       state: this.calibrationState,
+      stage,
       corner_index: this.dynamicCornerIdx,
       sample_count: this.calibrationSamples.length,
       corner_count: DYNAMIC_CALIB_CORNERS,
-      complete:
-        this.calibrationState === "idle" &&
-        performance.now() / 1000 < this.calibrationDoneUntil + 0.01
-          ? false
-          : this.calibrationState === "idle" &&
-            (this.trackingMode === "CALIBRATED_THRESHOLDS"
-              ? this.offsets.offset_pitch !== 0 || this.offsets.offset_yaw !== 0
-              : this.offsets.dynamic_corners.length === DYNAMIC_CALIB_CORNERS),
+      complete: this.calibrated && !inGrace,
+      progress_pct: Math.min(100, (currentStep / totalSteps) * 100),
+      position_ok: this.positionOkFrames >= 5,
+      quality: Math.min(1, this.positionOkFrames / 10),
+      countdown_remaining: countdownRemaining,
     };
   }
 
@@ -93,6 +142,7 @@ export class FocusClassifier {
     gaze: GazeMetrics,
     transformMatrix?: Float32Array | null,
     now = performance.now() / 1000,
+    ipd = 0.1,
   ): ClassificationResult | null {
     this.advanceCalibration(now);
 
@@ -100,11 +150,18 @@ export class FocusClassifier {
       return null;
     }
 
+    const nose = landmarks[4];
+    const centered = nose.x > 0.3 && nose.x < 0.7 && nose.y > 0.25 && nose.y < 0.75;
+    this.positionOkFrames = centered ? this.positionOkFrames + 1 : 0;
+
     const { smoothed, previous } = applyLandmarkSmoothing(landmarks, this.previousLandmarks);
     this.previousLandmarks = previous;
 
     const metrics = extractFaceMetrics(smoothed, transformMatrix ?? undefined);
     const calibrated = applyCalibration(metrics, this.offsets);
+
+    this.smoothedYaw = this.smoothedYaw * 0.7 + calibrated.effective_yaw * 0.3;
+    this.smoothedPitch = this.smoothedPitch * 0.7 + calibrated.effective_pitch * 0.3;
 
     this.captureCalibrationSample(
       metrics.pitch,
@@ -113,21 +170,22 @@ export class FocusClassifier {
       calibrated.head_vector,
       gaze,
       now,
+      ipd,
     );
 
     const rawBlink = gaze.is_blinking;
     this.blinkFrames = rawBlink ? this.blinkFrames + 1 : 0;
     const eyesClosed = this.blinkFrames >= 2;
 
-    let decision = classifyFallbackFocus(calibrated.effective_yaw, {
+    let decision = classifyFallbackFocus(this.smoothedYaw, this.smoothedPitch, {
       ...gaze,
       is_blinking: eyesClosed,
     });
 
-    let status = decision.status;
+    let status = this.debounceStatus(decision.status);
     let reason = decision.reason;
 
-    const eyeOffset = computeEyeOffset(gaze);
+    const eyeOffset = computeEyeOffset(gaze, ipd);
     const finalGaze: Vec3 = [
       calibrated.head_vector[0] + eyeOffset[0],
       calibrated.head_vector[1] + eyeOffset[1],
@@ -144,18 +202,18 @@ export class FocusClassifier {
       const eyesOpen = !eyesClosed;
 
       if (!headForward && inside && eyesOpen) {
-        status = "FOCUSED";
+        status = this.debounceStatus("FOCUSED");
         reason = "Lazy head: eyes on screen";
       }
 
       if (headForward && !inside && Math.abs(dist) < EDGE_NEAR_THRESH) {
-        status = "LOOKING AWAY";
+        status = this.debounceStatus("LOOKING AWAY");
         reason = "Look-ahead: eyes past screen edge";
       }
     }
 
     if (isPoorPosture(calibrated.effective_s) && status === "FOCUSED") {
-      status = "SLOUCHING";
+      status = this.debounceStatus("SLOUCHING");
       reason = "Posture slouch detected";
     }
 
@@ -168,6 +226,28 @@ export class FocusClassifier {
       effective_pitch: calibrated.effective_pitch,
       effective_s: calibrated.effective_s,
     };
+  }
+
+  private debounceStatus(candidate: InternalStatus): InternalStatus {
+    if (candidate === this.currentStatus) {
+      this.pendingStatus = null;
+      this.pendingStatusFrames = 0;
+      return this.currentStatus;
+    }
+
+    if (candidate === this.pendingStatus) {
+      this.pendingStatusFrames += 1;
+      if (this.pendingStatusFrames >= STATUS_DEBOUNCE_FRAMES) {
+        this.currentStatus = candidate;
+        this.pendingStatus = null;
+        this.pendingStatusFrames = 0;
+      }
+    } else {
+      this.pendingStatus = candidate;
+      this.pendingStatusFrames = 1;
+    }
+
+    return this.currentStatus;
   }
 
   private advanceCalibration(now: number): void {
@@ -196,6 +276,7 @@ export class FocusClassifier {
     headVector: Vec3,
     gaze: GazeMetrics,
     now: number,
+    ipd: number,
   ): void {
     if (this.trackingMode !== "DYNAMIC_MAPPING") {
       if (this.calibrationState !== "sampling") return;
@@ -208,14 +289,19 @@ export class FocusClassifier {
         this.calibrationState = "idle";
         this.calibrationSamples = [];
         this.calibrationDoneUntil = now + 0.8;
+        this.calibrated = true;
       }
       return;
     }
 
     if (this.calibrationState !== "corner_sampling") return;
 
-    const eyeOffset = computeEyeOffset(gaze);
-    const finalGaze: Vec3 = [headVector[0] + eyeOffset[0], headVector[1] + eyeOffset[1], headVector[2] + eyeOffset[2]];
+    const eyeOffset = computeEyeOffset(gaze, ipd);
+    const finalGaze: Vec3 = [
+      headVector[0] + eyeOffset[0],
+      headVector[1] + eyeOffset[1],
+      headVector[2] + eyeOffset[2],
+    ];
     const projected = projectToPlane2d(finalGaze);
 
     this.calibrationSamples.push([projected[0], projected[1], 0]);
@@ -226,8 +312,16 @@ export class FocusClassifier {
       this.dynamicCornerIdx += 1;
 
       if (this.dynamicCornerIdx >= DYNAMIC_CALIB_CORNERS) {
-        this.calibrationState = "idle";
-        this.calibrationDoneUntil = now + 0.8;
+        if (polygonArea(this.offsets.dynamic_corners) > 1e-6) {
+          this.calibrationState = "idle";
+          this.calibrationDoneUntil = now + 0.8;
+          this.calibrated = true;
+        } else {
+          this.offsets.dynamic_corners = [];
+          this.dynamicCornerIdx = 0;
+          this.calibrationState = "corner_countdown";
+          this.calibrationStartedAt = now;
+        }
       } else {
         this.calibrationState = "corner_countdown";
         this.calibrationStartedAt = now;
@@ -280,6 +374,7 @@ function averageSamples(samples: [number, number, number][]): [number, number, n
 
 export function classifyFallbackFocus(
   effectiveYaw: number,
+  effectivePitch: number,
   gaze: GazeMetrics,
 ): { status: InternalStatus; reason: string } {
   if (Math.abs(effectiveYaw) > HARD_SAFETY_YAW_LIMIT) {
@@ -287,6 +382,17 @@ export function classifyFallbackFocus(
       status: effectiveYaw > 0 ? "LOOKING RIGHT" : "LOOKING LEFT",
       reason: "Hard safety yaw exceeded",
     };
+  }
+
+  if (Math.abs(effectiveYaw) > SOFT_YAW_THRESHOLD) {
+    return {
+      status: "LOOKING AWAY",
+      reason: "Head turned away from screen",
+    };
+  }
+
+  if (effectivePitch > PITCH_DOWN_THRESHOLD) {
+    return { status: "LOOKING DOWN", reason: "Head pitched down" };
   }
 
   if (gaze.is_blinking) {
@@ -311,4 +417,11 @@ export function isDistractedStatus(status: InternalStatus): boolean {
     "LOOKING DOWN",
     "FACE LOST",
   ].includes(status);
+}
+
+export function getCalibrationOffsets(classifier: FocusClassifier): CalibrationOffsets {
+  return {
+    ...classifier.offsets,
+    dynamic_corners: [...classifier.offsets.dynamic_corners],
+  };
 }

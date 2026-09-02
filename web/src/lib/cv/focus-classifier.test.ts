@@ -3,7 +3,7 @@ import { classifyFallbackFocus } from "@/lib/cv/focus-classifier";
 
 describe("classifyFallbackFocus", () => {
   it("detects hard yaw limit", () => {
-    const result = classifyFallbackFocus(45, {
+    const result = classifyFallbackFocus(45, 5, {
       horizontal_ratio: 0.5,
       vertical_ratio: 0.5,
       is_blinking: false,
@@ -12,8 +12,28 @@ describe("classifyFallbackFocus", () => {
     expect(result.status).toBe("LOOKING RIGHT");
   });
 
+  it("detects soft yaw distraction", () => {
+    const result = classifyFallbackFocus(30, 5, {
+      horizontal_ratio: 0.5,
+      vertical_ratio: 0.5,
+      is_blinking: false,
+      pupils_located: true,
+    });
+    expect(result.status).toBe("LOOKING AWAY");
+  });
+
+  it("detects looking down", () => {
+    const result = classifyFallbackFocus(5, 25, {
+      horizontal_ratio: 0.5,
+      vertical_ratio: 0.5,
+      is_blinking: false,
+      pupils_located: true,
+    });
+    expect(result.status).toBe("LOOKING DOWN");
+  });
+
   it("returns focused when centered", () => {
-    const result = classifyFallbackFocus(5, {
+    const result = classifyFallbackFocus(5, 5, {
       horizontal_ratio: 0.5,
       vertical_ratio: 0.5,
       is_blinking: false,
@@ -23,7 +43,7 @@ describe("classifyFallbackFocus", () => {
   });
 
   it("detects gaze away", () => {
-    const result = classifyFallbackFocus(5, {
+    const result = classifyFallbackFocus(5, 5, {
       horizontal_ratio: 0.85,
       vertical_ratio: 0.5,
       is_blinking: false,

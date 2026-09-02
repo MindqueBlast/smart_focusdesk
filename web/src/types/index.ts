@@ -52,14 +52,27 @@ export interface FrameMetrics {
   face_count: number;
   confidence: number;
   calibration: CalibrationState;
+  tracking_quality?: TrackingQuality;
+}
+
+export interface TrackingQuality {
+  confidence: number;
+  lowLight: boolean;
+  faceCentered: boolean;
+  faceDistance: "too_close" | "too_far" | "good";
 }
 
 export interface CalibrationState {
   state: string;
+  stage: string;
   corner_index: number;
   sample_count: number;
   corner_count: number;
   complete: boolean;
+  progress_pct: number;
+  position_ok: boolean;
+  quality: number;
+  countdown_remaining?: number;
 }
 
 export interface CalibrationOffsets {
@@ -113,6 +126,23 @@ export interface AppSettings {
   reduced_motion: boolean;
   onboarding_complete: boolean;
   break_reminder_minutes: number;
+  daily_goal_minutes: number;
+  weekly_session_goal: number;
+  calibration_complete: boolean;
+}
+
+export interface StoredCalibration {
+  offsets: CalibrationOffsets;
+  tracking_mode: TrackingMode;
+  calibrated_at: number;
+}
+
+export interface UserProgress {
+  current_streak_days: number;
+  longest_streak: number;
+  total_focus_minutes: number;
+  sessions_this_week: number;
+  last_session_date: string | null;
 }
 
 export interface Insight {
@@ -129,4 +159,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reduced_motion: false,
   onboarding_complete: false,
   break_reminder_minutes: 90,
+  daily_goal_minutes: 60,
+  weekly_session_goal: 5,
+  calibration_complete: false,
 };

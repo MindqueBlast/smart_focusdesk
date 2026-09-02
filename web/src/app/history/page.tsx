@@ -3,17 +3,29 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Nav } from "@/components/layout/Nav";
+import { SignInCard } from "@/components/auth/SignInCard";
 import { ScoreRing } from "@/components/analytics/ScoreRing";
-import { getAllSessions } from "@/lib/storage/db";
+import { Button } from "@/components/ui/Button";
+import { getAllSessions, deleteSession } from "@/lib/storage/db";
 import { formatMinutes } from "@/lib/utils";
 import type { SessionSummary } from "@/types";
 
 export default function HistoryPage() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
 
+  const refresh = () => getAllSessions().then(setSessions);
+
   useEffect(() => {
-    getAllSessions().then(setSessions);
+    refresh();
   }, []);
+
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm("Delete this session?")) return;
+    await deleteSession(id);
+    refresh();
+  };
 
   return (
     <>
@@ -22,11 +34,15 @@ export default function HistoryPage() {
         <h1 className="font-display text-3xl font-semibold">Session History</h1>
         <p className="mt-2 text-muted">Your locally stored focus sessions</p>
 
+        <div className="mt-8">
+          <SignInCard variant="compact" />
+        </div>
+
         {sessions.length === 0 ? (
           <div className="mt-16 text-center">
             <p className="text-muted">No sessions yet.</p>
             <Link
-              href="/session"
+              href="/onboarding"
               className="mt-4 inline-block text-emerald hover:underline"
             >
               Start your first session
@@ -38,7 +54,7 @@ export default function HistoryPage() {
               <Link
                 key={session.session_id}
                 href={`/summary/${session.session_id}`}
-                className="glass flex items-center justify-between rounded-2xl p-5 transition-colors hover:border-emerald/30"
+                className="group flex items-center justify-between rounded-2xl border border-line/60 bg-panel/40 p-5 transition-colors hover:border-emerald/30"
               >
                 <div>
                   <div className="font-medium">
@@ -56,7 +72,16 @@ export default function HistoryPage() {
                     {session.distraction_event_count} distractions
                   </div>
                 </div>
-                <ScoreRing score={session.focus_score} size={72} />
+                <div className="flex items-center gap-4">
+                  <button
+                    type="button"
+                    onClick={(e) => handleDelete(e, session.session_id)}
+                    className="text-xs text-dim opacity-0 transition-opacity hover:text-crimson group-hover:opacity-100"
+                  >
+                    Delete
+                  </button>
+                  <ScoreRing score={session.focus_score} size={72} />
+                </div>
               </Link>
             ))}
           </div>

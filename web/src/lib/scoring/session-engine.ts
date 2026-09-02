@@ -1,4 +1,4 @@
-import { calculateFocusScore, computeRollingFocusScore, scoreFromFrame } from "./focus-score";
+import { calculateFocusScore, computeRollingFocusScore, scoreFromFrame, smoothDisplayScore } from "./focus-score";
 import type {
   DistractionEvent,
   FrameMetrics,
@@ -130,10 +130,17 @@ export function enrichFrameWithScore(
   metrics: Omit<FrameMetrics, "current_focus_score">,
   sensitivity = 1,
 ): FrameMetrics {
-  const currentFocusScore = scoreFromFrame(
-    metrics.status,
-    metrics.posture.effective_s,
+  const raw = scoreFromFrame(
+    {
+      status: metrics.status,
+      posture: metrics.posture.effective_s,
+      gaze: metrics.gaze,
+      headYaw: metrics.head_angle.yaw,
+      headPitch: metrics.head_angle.pitch,
+      confidence: metrics.confidence,
+    },
     sensitivity,
   );
+  const currentFocusScore = smoothDisplayScore(raw);
   return { ...metrics, current_focus_score: currentFocusScore };
 }

@@ -1,7 +1,10 @@
 import {
   BLINK_EAR_THRESHOLD,
+  EYE_OFFSET_SCALE,
+  GAZE_EXTREME_BOTTOM,
   GAZE_EXTREME_LEFT,
   GAZE_EXTREME_RIGHT,
+  GAZE_EXTREME_TOP,
   LEFT_EYE_CORNERS,
   LEFT_IRIS_CENTER,
   RIGHT_EYE_CORNERS,
@@ -48,7 +51,14 @@ function irisRatioInEye(
   };
 }
 
-export function estimateGaze(landmarks: Landmark[]): GazeMetrics {
+function interPupillaryDistance(landmarks: Landmark[]): number {
+  const left = landmarks[LEFT_IRIS_CENTER];
+  const right = landmarks[RIGHT_IRIS_CENTER];
+  if (!left || !right) return 0.1;
+  return Math.hypot(left.x - right.x, left.y - right.y);
+}
+
+export function estimateGaze(landmarks: Landmark[], headPitch = 0): GazeMetrics {
   const left = irisRatioInEye(
     landmarks,
     LEFT_IRIS_CENTER,
@@ -71,8 +81,9 @@ export function estimateGaze(landmarks: Landmark[]): GazeMetrics {
     };
   }
 
+  const pitchComp = headPitch * 0.008;
   const horizontalRatio = (left.horizontal + right.horizontal) / 2;
-  const verticalRatio = (left.vertical + right.vertical) / 2;
+  const verticalRatio = Math.max(0, Math.min(1, (left.vertical + right.vertical) / 2 + pitchComp));
 
   const leftEar = eyeAspectRatio(landmarks, 159, 145, LEFT_EYE_CORNERS.outer, LEFT_EYE_CORNERS.inner);
   const rightEar = eyeAspectRatio(landmarks, 386, 374, RIGHT_EYE_CORNERS.outer, RIGHT_EYE_CORNERS.inner);
@@ -89,14 +100,24 @@ export function estimateGaze(landmarks: Landmark[]): GazeMetrics {
 
 export function isGazeExtreme(gaze: GazeMetrics): boolean {
   if (gaze.horizontal_ratio === null) return false;
-  return gaze.horizontal_ratio <= GAZE_EXTREME_RIGHT || gaze.horizontal_ratio >= GAZE_EXTREME_LEFT;
+  const hExtreme =
+    gaze.horizontal_ratio <= GAZE_EXTREME_RIGHT || gaze.horizontal_ratio >= GAZE_EXTREME_LEFT;
+  const vExtreme =
+    gaze.vertical_ratio !== null &&
+    (gaze.vertical_ratio <= GAZE_EXTREME_TOP || gaze.vertical_ratio >= GAZE_EXTREME_BOTTOM);
+  return hExtreme || vExtreme;
 }
 
-export function computeEyeOffset(gaze: GazeMetrics): [number, number, number] {
+export function computeEyeOffset(gaze: GazeMetrics, ipd = 0.1): [number, number, number] {
   if (gaze.horizontal_ratio === null || gaze.vertical_ratio === null) {
     return [0, 0, 0];
   }
+  const scale = EYE_OFFSET_SCALE * Math.max(0.5, Math.min(2, ipd / 0.1));
   const gazeX = (0.5 - gaze.horizontal_ratio) * 2;
   const gazeY = (0.5 - gaze.vertical_ratio) * 2;
-  return [gazeX * 0.35, gazeY * 0.35, 0];
+  return [gazeX * scale, gazeY * scale, 0];
+}
+
+export function getInterPupillaryDistance(landmarks: Landmark[]): number {
+  return interPupillaryDistance(landmarks);
 }

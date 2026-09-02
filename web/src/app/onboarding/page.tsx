@@ -6,13 +6,17 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Nav } from "@/components/layout/Nav";
 import { Button } from "@/components/ui/Button";
 import { CameraPanel } from "@/components/session/CameraPanel";
+import { CalibrationFlow } from "@/components/calibration/CalibrationFlow";
+import { SignInCard } from "@/components/auth/SignInCard";
 import { useCamera } from "@/hooks/useCamera";
-import { loadSettings, saveSettings } from "@/lib/storage/db";
-import type { AppSettings } from "@/types";
+import { useCVWorker } from "@/hooks/useCVWorker";
+import { useFrameLoop } from "@/hooks/useFrameLoop";
+import { loadSettings, saveSettings, saveCalibration } from "@/lib/storage/db";
+import type { AppSettings, CalibrationOffsets, FrameMetrics, TrackingMode } from "@/types";
 
 const STEPS = [
   {
-    title: "Welcome to Smart Focus Desk",
+    title: "Welcome to SmartFocus",
     body: "A browser-based focus companion that tracks attention, gaze, and posture while you work.",
   },
   {
@@ -28,8 +32,8 @@ const STEPS = [
     body: "Sit arm's length from your screen. Keep your face centered and ensure good lighting.",
   },
   {
-    title: "Quick calibration",
-    body: "Stay still for 3 seconds while we capture your neutral pose. Press Continue when ready.",
+    title: "Calibrate your setup",
+    body: "A quick calibration tunes tracking to your unique posture and screen position.",
   },
   {
     title: "Understanding Focus Score",
@@ -56,15 +60,34 @@ export default function OnboardingPage() {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const { setVideoRef, isVideoMounted, state, error, isPlaying, start } = useCamera();
+  const [metrics, setMetrics] = useState<FrameMetrics | null>(null);
+  const [calibrated, setCalibrated] = useState(false);
+  const { videoRef, setVideoRef, isVideoMounted, state, error, isPlaying, start } = useCamera();
+
+  const onCalibrationSaved = async (offsets: CalibrationOffsets, mode: TrackingMode) => {
+    await saveCalibration({ offsets, tracking_mode: mode, calibrated_at: Date.now() / 1000 });
+    setCalibrated(true);
+  };
+
+  const cv = useCVWorker((m) => setMetrics(m), onCalibrationSaved);
 
   useEffect(() => {
     loadSettings().then(setSettings);
   }, []);
 
+  useEffect(() => {
+    if (step >= 2 && isVideoMounted) {
+      void start().then(() => cv.init());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step >= 2, isVideoMounted]);
+
+  useFrameLoop(videoRef, step >= 4 && cv.state === "ready", cv.sendFrame);
+
   const current = STEPS[step];
   const showCamera = step >= 2;
   const panelStatus = cameraPanelStatus(state, isPlaying);
+  const isCalibrationStep = step === 4;
 
   const handleNext = async () => {
     if (step === 2 && state !== "active") {
@@ -73,9 +96,17 @@ export default function OnboardingPage() {
       return;
     }
 
+    if (isCalibrationStep && !calibrated) {
+      return;
+    }
+
     if (step >= STEPS.length - 1) {
       if (settings) {
-        await saveSettings({ ...settings, onboarding_complete: true });
+        await saveSettings({
+          ...settings,
+          onboarding_complete: true,
+          calibration_complete: calibrated,
+        });
       }
       router.push("/session");
       return;
@@ -110,7 +141,7 @@ export default function OnboardingPage() {
             <h1 className="font-display text-3xl font-semibold md:text-4xl">{current.title}</h1>
             <p className="text-lg leading-relaxed text-muted">{current.body}</p>
 
-            {showCamera && (
+            {showCamera && !isCalibrationStep && (
               <CameraPanel
                 videoRef={setVideoRef}
                 className="aspect-video w-full"
@@ -124,6 +155,24 @@ export default function OnboardingPage() {
                 }
               />
             )}
+
+            {isCalibrationStep && (
+              <div className="space-y-4">
+                <CameraPanel
+                  videoRef={setVideoRef}
+                  className="aspect-video w-full"
+                  status={panelStatus}
+                />
+                <CalibrationFlow
+                  metrics={metrics}
+                  trackingMode={settings?.tracking_mode ?? "CALIBRATED_THRESHOLDS"}
+                  onStartCalibration={() => cv.startCalibration()}
+                  onComplete={() => setCalibrated(true)}
+                />
+              </div>
+            )}
+
+            {step === STEPS.length - 1 && <SignInCard variant="compact" />}
 
             {step === 2 && error && (
               <div className="rounded-xl border border-crimson/30 bg-crimson/10 p-4 text-sm text-crimson">
@@ -139,12 +188,20 @@ export default function OnboardingPage() {
               Back
             </Button>
           )}
-          <Button onClick={handleNext} disabled={step === 2 && state !== "active" && !isVideoMounted}>
+          <Button
+            onClick={handleNext}
+            disabled={
+              (step === 2 && state !== "active" && !isVideoMounted) ||
+              (isCalibrationStep && !calibrated)
+            }
+          >
             {step === 2 && state !== "active"
               ? "Allow Camera"
-              : step === STEPS.length - 1
-                ? "Start First Session"
-                : "Continue"}
+              : isCalibrationStep && !calibrated
+                ? "Complete calibration first"
+                : step === STEPS.length - 1
+                  ? "Start First Session"
+                  : "Continue"}
           </Button>
         </div>
       </main>

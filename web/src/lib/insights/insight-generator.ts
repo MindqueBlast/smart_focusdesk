@@ -1,4 +1,5 @@
 import type { Insight, SessionSummary } from "@/types";
+import { calculateFocusScore } from "@/lib/scoring/focus-score";
 
 export function generateInsights(sessions: SessionSummary[]): Insight[] {
   if (sessions.length === 0) return [];
@@ -10,6 +11,47 @@ export function generateInsights(sessions: SessionSummary[]): Insight[] {
     sorted.reduce((sum, s) => sum + s.focus_score, 0) / sorted.length;
   const avgDuration =
     sorted.reduce((sum, s) => sum + s.total_duration_minutes, 0) / sorted.length;
+
+  const now = Date.now() / 1000;
+  const weekAgo = now - 7 * 24 * 3600;
+  const twoWeeksAgo = now - 14 * 24 * 3600;
+  const thisWeek = sorted.filter((s) => s.start_time >= weekAgo);
+  const lastWeek = sorted.filter((s) => s.start_time >= twoWeeksAgo && s.start_time < weekAgo);
+
+  if (thisWeek.length > 0 && lastWeek.length > 0) {
+    const thisAvg = thisWeek.reduce((s, x) => s + x.focus_score, 0) / thisWeek.length;
+    const lastAvg = lastWeek.reduce((s, x) => s + x.focus_score, 0) / lastWeek.length;
+    const diff = thisAvg - lastAvg;
+    if (Math.abs(diff) >= 5) {
+      insights.push({
+        id: "week-trend",
+        text:
+          diff > 0
+            ? `Your focus score improved ${Math.round(diff)} points vs last week. Keep it up!`
+            : `Your focus score dropped ${Math.round(Math.abs(diff))} points vs last week. Try shorter, more frequent sessions.`,
+        category: "focus",
+        priority: 1,
+      });
+    }
+  }
+
+  const recoveryTimes: number[] = [];
+  for (const s of sorted.slice(0, 5)) {
+    const { stats } = calculateFocusScore(s.ticks, s.total_duration_seconds);
+    if (stats.avg_recovery_seconds > 0) recoveryTimes.push(stats.avg_recovery_seconds);
+  }
+  if (recoveryTimes.length > 0) {
+    const avgRecovery = recoveryTimes.reduce((a, b) => a + b, 0) / recoveryTimes.length;
+    insights.push({
+      id: "recovery",
+      text:
+        avgRecovery < 5
+          ? `You recover focus quickly (avg ${avgRecovery.toFixed(1)}s after distractions).`
+          : `It takes you ~${avgRecovery.toFixed(0)}s to refocus after distractions. Try a brief breathing pause.`,
+      category: "distraction",
+      priority: 2,
+    });
+  }
 
   if (avgScore >= 75) {
     insights.push({
@@ -27,25 +69,6 @@ export function generateInsights(sessions: SessionSummary[]): Insight[] {
     });
   }
 
-  const longSessions = sorted.filter((s) => s.total_duration_minutes >= 30);
-  const shortSessions = sorted.filter((s) => s.total_duration_minutes < 30);
-
-  if (longSessions.length > 0 && shortSessions.length > 0) {
-    const longAvg =
-      longSessions.reduce((s, x) => s + x.distraction_event_count, 0) / longSessions.length;
-    const shortAvg =
-      shortSessions.reduce((s, x) => s + x.distraction_event_count, 0) / shortSessions.length;
-
-    if (longAvg < shortAvg) {
-      insights.push({
-        id: "longer-fewer-distractions",
-        text: "You had significantly fewer distractions during longer uninterrupted sessions.",
-        category: "distraction",
-        priority: 2,
-      });
-    }
-  }
-
   const best = sorted.reduce((a, b) => (a.focus_score > b.focus_score ? a : b));
   const bestHour = new Date(best.start_time * 1000).getHours();
   insights.push({
@@ -55,13 +78,12 @@ export function generateInsights(sessions: SessionSummary[]): Insight[] {
     priority: 3,
   });
 
-  const latest = sorted[0];
-  if (latest.max_deep_focus_streak_minutes >= 10) {
+  if (avgDuration >= 45) {
     insights.push({
-      id: "deep-streak",
-      text: `Your longest uninterrupted focus streak was ${Math.round(latest.max_deep_focus_streak_minutes)} minutes in your latest session.`,
-      category: "focus",
-      priority: 2,
+      id: "session-length",
+      text: `Your focus tends to drop after ~${Math.round(avgDuration * 0.7)} minutes. Consider shorter focus blocks.`,
+      category: "timing",
+      priority: 3,
     });
   }
 
@@ -76,15 +98,6 @@ export function generateInsights(sessions: SessionSummary[]): Insight[] {
       text: "Posture drift appears in multiple sessions. Consider adjusting your monitor height.",
       category: "posture",
       priority: 3,
-    });
-  }
-
-  if (avgDuration >= 40) {
-    insights.push({
-      id: "first-half",
-      text: `Your focus was strongest during your first ${Math.round(avgDuration * 0.6)} minutes on average.`,
-      category: "timing",
-      priority: 4,
     });
   }
 
@@ -112,4 +125,21 @@ export function aggregateWeeklyStats(sessions: SessionSummary[]) {
     totalDistractions: weekSessions.reduce((s, x) => s + x.distraction_event_count, 0),
     bestStreak: Math.max(0, ...weekSessions.map((s) => s.max_deep_focus_streak_minutes)),
   };
+}
+
+export function computeFocusHeatmap(sessions: SessionSummary[]): number[][] {
+  const grid = Array.from({ length: 7 }, () => Array(24).fill(0));
+  const counts = Array.from({ length: 7 }, () => Array(24).fill(0));
+
+  for (const s of sessions) {
+    const d = new Date(s.start_time * 1000);
+    const day = d.getDay();
+    const hour = d.getHours();
+    grid[day][hour] += s.focus_score;
+    counts[day][hour] += 1;
+  }
+
+  return grid.map((row, di) =>
+    row.map((sum, hi) => (counts[di][hi] > 0 ? sum / counts[di][hi] : 0)),
+  );
 }

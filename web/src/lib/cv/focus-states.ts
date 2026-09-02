@@ -18,10 +18,13 @@ export interface FocusStateContext {
   sessionDurationMin: number;
   currentScore: number;
   poorPosture: boolean;
+  breakReminderMinutes?: number;
 }
 
 export function mapToFocusState(ctx: FocusStateContext): FocusState {
-  if (ctx.sessionDurationMin >= 90 && ctx.currentScore < 45) {
+  const breakMin = ctx.breakReminderMinutes ?? 90;
+
+  if (ctx.sessionDurationMin >= breakMin && ctx.currentScore < 45) {
     return "Take a Break";
   }
 

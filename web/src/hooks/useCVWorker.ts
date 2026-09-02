@@ -1,22 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FrameMetrics, TrackingMode } from "@/types";
+import type { CalibrationOffsets, FrameMetrics, TrackingMode } from "@/types";
 import type { WorkerInMessage, WorkerOutMessage } from "@/workers/cv-worker";
 
-export type CVWorkerState =
-  | "idle"
-  | "loading"
-  | "ready"
-  | "error";
+export type CVWorkerState = "idle" | "loading" | "ready" | "error";
 
-export function useCVWorker(onMetrics: (metrics: FrameMetrics) => void) {
+export function useCVWorker(
+  onMetrics: (metrics: FrameMetrics) => void,
+  onCalibrationSaved?: (offsets: CalibrationOffsets, mode: TrackingMode) => void,
+) {
   const workerRef = useRef<Worker | null>(null);
   const [state, setState] = useState<CVWorkerState>("idle");
   const [loadMessage, setLoadMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
   const onMetricsRef = useRef(onMetrics);
+  const onCalibRef = useRef(onCalibrationSaved);
   onMetricsRef.current = onMetrics;
+  onCalibRef.current = onCalibrationSaved;
 
   const init = useCallback(async () => {
     if (workerRef.current) return;
@@ -38,6 +39,9 @@ export function useCVWorker(onMetrics: (metrics: FrameMetrics) => void) {
           break;
         case "metrics":
           onMetricsRef.current(msg.data);
+          break;
+        case "calibration_saved":
+          onCalibRef.current?.(msg.offsets, msg.mode);
           break;
         case "error":
           setState("error");
@@ -82,8 +86,11 @@ export function useCVWorker(onMetrics: (metrics: FrameMetrics) => void) {
     init,
     sendFrame,
     setTrackingMode: (mode: TrackingMode) => post({ type: "set_tracking_mode", mode }),
+    loadCalibration: (offsets: CalibrationOffsets, mode: TrackingMode) =>
+      post({ type: "load_calibration", offsets, mode }),
     startCalibration: () => post({ type: "start_calibration" }),
     setSensitivity: (value: number) => post({ type: "set_sensitivity", value }),
+    setBreakReminder: (minutes: number) => post({ type: "set_break_reminder", minutes }),
     sessionStart: () => post({ type: "session_start" }),
     sessionStop: () => post({ type: "session_stop" }),
   };

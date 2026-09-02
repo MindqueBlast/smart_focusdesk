@@ -4,13 +4,15 @@ import {
   FaceLandmarker,
   FilesetResolver,
 } from "@mediapipe/tasks-vision";
-import { estimateGaze } from "../lib/cv/gaze-estimator";
+import { estimateGaze, getInterPupillaryDistance } from "../lib/cv/gaze-estimator";
 import { FocusClassifier } from "../lib/cv/focus-classifier";
 import { buildPostureMetrics, isPoorPosture } from "../lib/cv/posture";
 import { extractFaceMetrics } from "../lib/cv/head-pose";
 import { mapToFocusState } from "../lib/cv/focus-states";
+import { computeTrackingQuality } from "../lib/cv/tracking-confidence";
+import { LOW_CONFIDENCE_THRESHOLD } from "../lib/cv/constants";
 import { enrichFrameWithScore } from "../lib/scoring/session-engine";
-import type { FrameMetrics, TrackingMode } from "../types";
+import type { CalibrationOffsets, FrameMetrics, TrackingMode } from "../types";
 
 let landmarker: FaceLandmarker | null = null;
 let classifier = new FocusClassifier();
@@ -18,13 +20,20 @@ let lastTimestamp = 0;
 let sustainedDistractionStart: number | null = null;
 let sessionStartTime: number | null = null;
 let sensitivity = 1;
+let breakReminderMinutes = 90;
+let offscreenCanvas: OffscreenCanvas | null = null;
+let lastGoodMetrics: FrameMetrics | null = null;
+let lowConfidenceFrames = 0;
+let calibrationSavedEmitted = false;
 
 export type WorkerInMessage =
   | { type: "init"; modelUrl: string }
   | { type: "frame"; bitmap: ImageBitmap; timestamp: number }
   | { type: "set_tracking_mode"; mode: TrackingMode }
+  | { type: "load_calibration"; offsets: CalibrationOffsets; mode: TrackingMode }
   | { type: "start_calibration" }
   | { type: "set_sensitivity"; value: number }
+  | { type: "set_break_reminder"; minutes: number }
   | { type: "session_start" }
   | { type: "session_stop" };
 
@@ -32,7 +41,8 @@ export type WorkerOutMessage =
   | { type: "ready" }
   | { type: "error"; message: string }
   | { type: "metrics"; data: FrameMetrics }
-  | { type: "init_progress"; message: string };
+  | { type: "init_progress"; message: string }
+  | { type: "calibration_saved"; offsets: CalibrationOffsets; mode: TrackingMode };
 
 async function initLandmarker(modelUrl: string) {
   self.postMessage({ type: "init_progress", message: "Loading vision models..." } satisfies WorkerOutMessage);
@@ -41,16 +51,23 @@ async function initLandmarker(modelUrl: string) {
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm",
   );
 
-  landmarker = await FaceLandmarker.createFromOptions(vision, {
-    baseOptions: {
-      modelAssetPath: modelUrl,
-      delegate: "GPU",
-    },
-    runningMode: "VIDEO",
+  const options = {
+    baseOptions: { modelAssetPath: modelUrl, delegate: "GPU" as const },
+    runningMode: "VIDEO" as const,
     numFaces: 2,
     outputFaceBlendshapes: false,
     outputFacialTransformationMatrixes: true,
-  });
+  };
+
+  try {
+    landmarker = await FaceLandmarker.createFromOptions(vision, options);
+  } catch {
+    self.postMessage({ type: "init_progress", message: "GPU unavailable, using CPU..." } satisfies WorkerOutMessage);
+    landmarker = await FaceLandmarker.createFromOptions(vision, {
+      ...options,
+      baseOptions: { modelAssetPath: modelUrl, delegate: "CPU" },
+    });
+  }
 
   self.postMessage({ type: "ready" } satisfies WorkerOutMessage);
 }
@@ -58,8 +75,14 @@ async function initLandmarker(modelUrl: string) {
 function processFrame(bitmap: ImageBitmap, timestamp: number) {
   if (!landmarker) return;
 
-  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-  const ctx = canvas.getContext("2d");
+  if (!offscreenCanvas) {
+    offscreenCanvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  }
+  if (offscreenCanvas.width !== bitmap.width || offscreenCanvas.height !== bitmap.height) {
+    offscreenCanvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  }
+
+  const ctx = offscreenCanvas.getContext("2d");
   if (!ctx) {
     bitmap.close();
     return;
@@ -68,11 +91,12 @@ function processFrame(bitmap: ImageBitmap, timestamp: number) {
   ctx.drawImage(bitmap, 0, 0);
   bitmap.close();
 
-  const results = landmarker.detectForVideo(canvas, timestamp);
+  const results = landmarker.detectForVideo(offscreenCanvas, timestamp);
   const now = timestamp / 1000;
   const faceCount = results.faceLandmarks?.length ?? 0;
 
   if (faceCount === 0) {
+    lastGoodMetrics = null;
     self.postMessage({
       type: "metrics",
       data: buildNoFaceMetrics(now),
@@ -96,9 +120,12 @@ function processFrame(bitmap: ImageBitmap, timestamp: number) {
   const transformMatrix = results.facialTransformationMatrixes?.[0]?.data
     ? new Float32Array(results.facialTransformationMatrixes[0].data)
     : null;
-  const gaze = estimateGaze(landmarks);
 
-  const classification = classifier.processFrame(landmarks, gaze, transformMatrix, now);
+  const faceMetrics = extractFaceMetrics(landmarks, transformMatrix ?? undefined);
+  const ipd = getInterPupillaryDistance(landmarks);
+  const gaze = estimateGaze(landmarks, faceMetrics.pitch);
+
+  const classification = classifier.processFrame(landmarks, gaze, transformMatrix, now, ipd);
   if (!classification) {
     self.postMessage({
       type: "metrics",
@@ -107,7 +134,7 @@ function processFrame(bitmap: ImageBitmap, timestamp: number) {
     return;
   }
 
-  const faceMetrics = extractFaceMetrics(landmarks, transformMatrix ?? undefined);
+  const trackingQuality = computeTrackingQuality(landmarks, gaze);
   const posture = buildPostureMetrics(
     faceMetrics.s_factor,
     faceMetrics.norm_s,
@@ -126,6 +153,21 @@ function processFrame(bitmap: ImageBitmap, timestamp: number) {
 
   const sessionDurationMin = sessionStartTime ? (now - sessionStartTime) / 60 : 0;
 
+  const calState = classifier.getCalibrationState(now);
+  if (calState.complete && calState.stage === "complete" && !calibrationSavedEmitted) {
+    calibrationSavedEmitted = true;
+    self.postMessage({
+      type: "calibration_saved",
+      offsets: {
+        offset_pitch: classifier.offsets.offset_pitch,
+        offset_yaw: classifier.offsets.offset_yaw,
+        offset_s: classifier.offsets.offset_s,
+        dynamic_corners: [...classifier.offsets.dynamic_corners],
+      },
+      mode: classifier.trackingMode,
+    } satisfies WorkerOutMessage);
+  }
+
   const baseMetrics = {
     timestamp: now,
     status: classification.status,
@@ -139,8 +181,9 @@ function processFrame(bitmap: ImageBitmap, timestamp: number) {
     gaze_coord: classification.gaze_coord,
     face_detected: true,
     face_count: 1,
-    confidence: 0.9,
-    calibration: classifier.getCalibrationState(),
+    confidence: trackingQuality.confidence,
+    tracking_quality: trackingQuality,
+    calibration: calState,
     focusState: mapToFocusState({
       status: classification.status,
       effectiveS: classification.effective_s,
@@ -148,17 +191,36 @@ function processFrame(bitmap: ImageBitmap, timestamp: number) {
       sessionDurationMin,
       currentScore: 0,
       poorPosture: isPoorPosture(classification.effective_s),
+      breakReminderMinutes,
     }),
   };
 
-  const enriched = enrichFrameWithScore(baseMetrics, sensitivity);
+  let enriched = enrichFrameWithScore(baseMetrics, sensitivity);
+
+  if (trackingQuality.confidence < LOW_CONFIDENCE_THRESHOLD) {
+    lowConfidenceFrames += 1;
+    if (lastGoodMetrics && lowConfidenceFrames < 15) {
+      enriched = {
+        ...lastGoodMetrics,
+        timestamp: now,
+        calibration: calState,
+        tracking_quality: trackingQuality,
+        confidence: trackingQuality.confidence,
+      };
+    }
+  } else {
+    lowConfidenceFrames = 0;
+    lastGoodMetrics = enriched;
+  }
+
   enriched.focusState = mapToFocusState({
-    status: classification.status,
+    status: enriched.status,
     effectiveS: classification.effective_s,
     sustainedDistractionSec,
     sessionDurationMin,
     currentScore: enriched.current_focus_score,
     poorPosture: isPoorPosture(classification.effective_s),
+    breakReminderMinutes,
   });
 
   self.postMessage({ type: "metrics", data: enriched } satisfies WorkerOutMessage);
@@ -182,7 +244,7 @@ function buildNoFaceMetrics(now: number): FrameMetrics {
     face_detected: false,
     face_count: 0,
     confidence: 0,
-    calibration: classifier.getCalibrationState(),
+    calibration: classifier.getCalibrationState(now),
   };
 }
 
@@ -202,10 +264,18 @@ self.onmessage = async (event: MessageEvent<WorkerInMessage>) => {
         classifier.trackingMode = msg.mode;
         break;
       case "start_calibration":
+        calibrationSavedEmitted = false;
         classifier.startCalibration();
+        break;
+      case "load_calibration":
+        calibrationSavedEmitted = true;
+        classifier.setOffsets(msg.offsets, msg.mode);
         break;
       case "set_sensitivity":
         sensitivity = msg.value;
+        break;
+      case "set_break_reminder":
+        breakReminderMinutes = msg.minutes;
         break;
       case "session_start":
         sessionStartTime = performance.now() / 1000;

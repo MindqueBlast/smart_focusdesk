@@ -18,7 +18,9 @@ import {
   getFirebaseAuth,
   googleProvider,
   isFirebaseConfigured,
+  pullSessionsFromCloud,
 } from "@/lib/storage/firebase";
+import { mergeSessionsFromCloud } from "@/lib/storage/db";
 
 interface AuthContextValue {
   user: User | null;
@@ -41,9 +43,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const unsub = onAuthStateChanged(auth, (nextUser) => {
+    const unsub = onAuthStateChanged(auth, async (nextUser) => {
       setUser(nextUser);
       setLoading(false);
+      if (nextUser) {
+        try {
+          const cloud = await pullSessionsFromCloud(nextUser.uid);
+          await mergeSessionsFromCloud(cloud);
+        } catch {
+          // pull is best-effort
+        }
+      }
     });
     return unsub;
   }, []);

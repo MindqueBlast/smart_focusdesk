@@ -27,6 +27,14 @@ export const BLINK_FRAMES_THRESHOLD = 2;
 export const BLINK_EAR_THRESHOLD = 0.21;
 export const GAZE_EXTREME_LEFT = 0.8;
 export const GAZE_EXTREME_RIGHT = 0.2;
+export const GAZE_EXTREME_TOP = 0.25;
+export const GAZE_EXTREME_BOTTOM = 0.75;
+
+export const STATUS_DEBOUNCE_FRAMES = 4;
+export const SOFT_YAW_THRESHOLD = 26;
+export const PITCH_DOWN_THRESHOLD = 20;
+export const SCORE_EMA_ALPHA = 0.15;
+export const LOW_CONFIDENCE_THRESHOLD = 0.45;
 
 export const GRACE_PERIOD_MS = 2000;
 export const DISTRACTION_ALERT_SECONDS = 5;

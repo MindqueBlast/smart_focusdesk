@@ -1,9 +1,8 @@
 import { initializeApp, getApps } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
-import { doc, getFirestore, setDoc } from "firebase/firestore";
+import { collection, doc, getDocs, getFirestore, setDoc } from "firebase/firestore";
 import type { SessionSummary } from "@/types";
 
-// Public web client config (same project as legacy dashboard). Override via env in Vercel if needed.
 const firebaseConfig = {
   apiKey:
     process.env.NEXT_PUBLIC_FIREBASE_API_KEY ?? "AIzaSyDM3SaTqB3lQ0QLFN2kunjJqedNW_xdk3k",
@@ -42,5 +41,17 @@ export async function syncSessionToCloud(uid: string, summary: SessionSummary): 
     ...stripped,
     user_id: uid,
     synced_at: Date.now() / 1000,
+  });
+}
+
+export async function pullSessionsFromCloud(uid: string): Promise<SessionSummary[]> {
+  const app = getFirebaseApp();
+  if (!app) return [];
+
+  const firestore = getFirestore(app);
+  const snap = await getDocs(collection(firestore, "users", uid, "sessions"));
+  return snap.docs.map((d) => {
+    const data = d.data() as Omit<SessionSummary, "ticks">;
+    return { ...data, ticks: [] } as SessionSummary;
   });
 }

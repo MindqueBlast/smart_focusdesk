@@ -14,7 +14,7 @@ const jakarta = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Smart Focus Desk — AI Focus Tracking",
+  title: "SmartFocus — AI Focus Tracking",
   description:
     "Privacy-first focus tracking through your webcam. All analysis runs locally in your browser.",
 };
